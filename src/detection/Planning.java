@@ -1,4 +1,4 @@
-package detection;
+package detection; 
 
 import main.*;
 import patterns.SearchPattern;
