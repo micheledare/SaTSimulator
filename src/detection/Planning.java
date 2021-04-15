@@ -28,6 +28,9 @@ public class Planning extends UAVDetection {
                 toReturn = new CPManager(candidates).getPlan();
             else if (Parameters.solver == Parameters.Solver.PLANNING || Parameters.solver == Parameters.Solver.PLANNINGH || Parameters.solver == Parameters.Solver.PLANNINGZ)
                 toReturn = new PDDLManager(candidates).getPlan();
+            else if (Parameters.solver == Parameters.Solver.DISTRIBUTED) {
+            	toReturn = new Distributed(candidates).getPlan();
+            }
             else if (Parameters.solver == Parameters.Solver.GREEDY) {
                 toReturn = new GreedyAlgorithm(candidates).getPlan();
             }else {

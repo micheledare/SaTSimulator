@@ -9,6 +9,10 @@ public class Parameters {
     static public long scaleTime = 50; // 50 ms -> 1 s
 
     static public double distanceTerrain = 1250;//2500;
+    
+    // parameters for Distributed
+    static public double eta = 0.005;
+    static public double delta = 0.75;
 
     static boolean randomSeed = true;
     static public long seed = 0;
@@ -68,7 +72,7 @@ public class Parameters {
     static public int filterNumber = 30;
     public enum Solver {PLANNING ("Planning"), PLANNINGH ("PlanningH"), PLANNINGZ ("PlanningZ"), CP ("CP"), MDP ("MDP"), GREEDYCP ("GreedyCP"),
         CPWS ("CPWS"), GREEDYSEQ ("GreedySeq"), GREEDYBI ("GreedyBi"), CPISO ("CPISO"), CPISOWS ("CPISOWS"),
-        CPWSBI ("CPWSBI"), CPWSSEQ("CPWSSEQ"), CPISOWSBI ("CPISOWSBI"), CPISOWSSEQ ("CPISOWSSEQ"), GREEDY("Greedy") ;
+        CPWSBI ("CPWSBI"), CPWSSEQ("CPWSSEQ"), CPISOWSBI ("CPISOWSBI"), CPISOWSSEQ ("CPISOWSSEQ"), GREEDY("Greedy"), DISTRIBUTED("Distributed") ;
         private final String name;
         Solver(String s) {
             name = s;
@@ -77,7 +81,7 @@ public class Parameters {
             return this.name;
         }
     };
-    static public Solver solver = Solver.GREEDY;
+    static public Solver solver = Solver.DISTRIBUTED;
     static public boolean validatePlans = false;
 
     static public double weight = 0.1;
