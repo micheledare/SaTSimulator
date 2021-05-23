@@ -11,11 +11,15 @@ public class Parameters {
     static public double distanceTerrain = 1250;//2500;
     
     // parameters for Distributed
-    static public double eta = 0.005;
-    static public double delta = 0.75;
+    static public double eta = 0.5;
+    static public double delta = 1;
+    static public double K = 0.01;
+    static public boolean verbose = false;
+    static public boolean verbose2 = false;
+    static public int printIterations = -1;
 
-    static boolean randomSeed = true;
-    static public long seed = 0;
+    static boolean randomSeed = false;
+    static public long seed = 5;
     static boolean randomDestinatin = true;
     static public int nmin = 0;
     static public int nmax = 1000;
@@ -53,7 +57,7 @@ public class Parameters {
 
     //static public double targetTopSpeed = 28;
     // uav velocity (m/s)
-    static public int nUAV = 2; // number of sampling of evasivness
+    static public int nUAV = 1; // number of UAVs
     static public boolean isCentralised = true; //
     static public double uavEvading = 2; // number of sampling of evasivness
     static public double uavVelocity = 65;
@@ -84,7 +88,7 @@ public class Parameters {
     static public Solver solver = Solver.DISTRIBUTED;
     static public boolean validatePlans = false;
 
-    static public double weight = 0.1;
+    static public double weight = 0;
 
     // other parameters
     static double posErrEff = 1.0/radiusDistance;

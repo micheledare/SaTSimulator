@@ -106,7 +106,7 @@ public class MainAnimation extends Observable implements Runnable, Observer {
         UAVDetection detection = new Planning();
         state = new State(gr);
         if( grid == null) {
-            grid =  writeReadGrid(startPosition, mapFile,Parameters.gridName);
+			grid = writeReadGrid(startPosition, mapFile,Parameters.gridName);
         }
         List<List<Position>> cities = grid.getCitiesPositions();
         List<Position> possibleDestination = cities.get(Parameters.cityIndex);
@@ -123,7 +123,7 @@ public class MainAnimation extends Observable implements Runnable, Observer {
                 uav.setCurrentVelocity(new Velocity(0, Parameters.uavVelocity));
                 state.addUAV(uav);
             }else{
-                UAV uav = new UAV(startPositionUAV.getLatitude(), startPositionUAV.getLongitude(),detection);
+                UAV uav = new UAV(startPositionUAV.getLatitude(), startPositionUAV.getLongitude(), detection);
                 uav.setCurrentVelocity(new Velocity(0, Parameters.uavVelocity));
                 state.addUAV(uav);
             }

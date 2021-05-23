@@ -6,10 +6,6 @@ import main.State;
 import main.UAV;
 import patterns.SearchPattern;
 
-import java.io.IOException;
-import java.nio.file.Files;
-import java.nio.file.Paths;
-import java.nio.file.StandardOpenOption;
 import java.util.*;
 import java.util.stream.Collectors;
 
@@ -24,19 +20,20 @@ public class Distributed extends SolverManager {
 	Distributed(List<SearchPattern> candidate, List<UAV> uavs) {
         super(candidate, uavs);
     }
-    
-    //definition of class Node. Each node is a search pattern and a time window. Neighbours are search patterns that are possibly in contrast. 
-    // Action is the time at which the search pattern is to be initiated, and 0 if the search pattern will not be searched. 
+     
+    // definition of class Node. Each node is a search pattern and a time window. Neighbours are search patterns that are interfering (backward or forward)
+    // action is the time at which the search pattern is to be initiated, and 0 if the search pattern will not be searched. 
+	// resource is the UAV to which the node is assigned. "noresource" is the dummy resource of action 0
     class Node {
     	private int id; // progressive number from 1
     	private SearchPattern searchPattern; 
     	private double initialTime;
     	private double finalTime;
     	private double windowWidth;
-    	private double action; 
-    	private List<Node> neighbours = new ArrayList<>();
-    	private List<Node> precedingNeighbours = new ArrayList<>();
-    	private List<Node> followingNeighbours = new ArrayList<>();
+    	private String resource;
+    	private double action;
+    	private List<Node> backwardNeighbours = new ArrayList<>();
+    	private List<Node> forwardNeighbours = new ArrayList<>();
     	
     	// constructor
     	Node(int id, SearchPattern sp, double initialTime, double finalTime) {
@@ -45,176 +42,149 @@ public class Distributed extends SolverManager {
     		this.initialTime = initialTime;
     		this.finalTime = finalTime;
     		this.windowWidth = finalTime - initialTime;
-    		this.action = 0; // initialised at "not selected"
-    		//System.out.println("Created node " + this.toString() + " from search pattern " + sp.toString() + " of window " + sp.getMinT() + " - " + sp.getMaxT());
+    		this.resource = "noresource"; // initialised at dummmy resource "noresource"
+    		this.action = 0; 
     	}
     	
-    	// toString(), gives id, window and action
+    	// toString(), gives id, window, action and resource
     	public String toString() {
-    		return ((Integer)id).toString() + " w: " + this.initialTime + "-" + this.finalTime + " a: " + this.action;
+    		return ((Integer)id).toString() + " window: " + this.initialTime + "-" + this.finalTime + " action: " + this.action + " resource " + this.resource;
+    	}
+    	
+    	// method for setting the action
+    	public void setAction(String resource, double action) {
+    		this.resource = resource;
+    		this.action = action;
     	}
     	
     	// Method for filling the neighbours list. Accepts a list of nodes and fills edges with the calling node. 
     	public void setNeighbours(List<Node> nodeList) {
     		for (Node n : nodeList) {
-    			// adds n to the neighbours of the current node if they are *incompatible* (and avoids self loops)
-    			if (this != n && areNodesConflicting(this, n)){
-    				//System.out.println("D(" + this.id + ", " + n.id + ") = " + timeBetween(this, n));
-    				this.neighbours.add(n);
-    				
-    				if (n.initialTime <= this.finalTime) // preceding:
-    					this.precedingNeighbours.add(n); 
-    				else if (n.finalTime >= this.initialTime) // following:
-    					this.followingNeighbours.add(n);
+    			// adds n to the neighbours of the current node if they are interfering (and avoids self loops)
+    			if (this.id != n.id) {
+    				if (n.finalTime >= this.initialTime && n.initialTime - timeBetween(this, n) <= this.finalTime) // n is in forward interference with this
+    					this.forwardNeighbours.add(n);
+    				if (this.finalTime >= n.initialTime && this.initialTime - timeBetween(n, this) <= n.finalTime) // n is in backward interference with this
+    					this.backwardNeighbours.add(n);
     			}
     		}
-    		//System.out.println("Neighbours of node " + this.id + ": " + this.neighbours.toString());
-    	}
-    	
-    	public double restrictToWindow(double d) {
-    		if (d > this.finalTime)
-    			return finalTime;
-    		else if (d < this.initialTime)
-    			return initialTime;
-    		else 
-    			return d;
-    	}
-    	
-    	
-    	private double restrictToInitialTime(double d) {
-			if (d < this.initialTime)
-				return initialTime;
-			else
-				return d;
-		}
-    	
-    	
-    	public double inactionPenalty() {
-    		if(this.action != 0) return 0;
-    		
-    		double tau2 = this.getTau2();
-    		double tau1 = this.getTau1();
-    		return - Double.max(tau2-tau1, 0);
-    	} 
-
-		// computes the utility of the current node (sum of the neighbours' penalties and its own's)
-    	public double utility() {
-    		double overlapPenalty = 0;
-    		//System.out.println("Computing utility for node " + this.id + " of action " + this.action);
-    		
-    		// penalty for overlapping when they are both active
-    		if(this.action != 0) {
-    			for(Node n : this.precedingNeighbours) {
-    				if(n.action != 0) {
-    					overlapPenalty += -Double.max(n.action + timeBetween(n, this) - this.action, 0);
-    					//System.out.println("Overlap penalty between " + this.id + ", " + n.id + " of action " + this.action + ", " + n.action + ". Timebetween " + timeBetween(n,this) + ", penalty " + (-Double.max(n.action + timeBetween(n, this) - this.action, 0)));
-    				}
-    			}
-    			for(Node n : this.followingNeighbours) {
-    				if(n.action != 0) {
-    					overlapPenalty += -Double.max(this.action + timeBetween(this, n) - n.action, 0);
-    					//System.out.println("Overlap penalty between " + this.id + ", " + n.id + " of action " + this.action + ", " + n.action + ". Timebetween " + timeBetween(this,n) + ", penalty " + (-Double.max(this.action + timeBetween(this, n) - n.action, 0)));
-    				}
-    			}
-    		}
-    		//System.out.println("Total overlapping penalty: " + overlapPenalty);
-    		
-    		// penalty of inactive nodes
-    		int inactionPenalty = 0;
-    		inactionPenalty += this.inactionPenalty();
-    		for(Node n : this.neighbours) {
-    			inactionPenalty += n.inactionPenalty();
-    		} 
-    		//System.out.println("Total inaction penalty: " + inactionPenalty);
-
-    		
-			return overlapPenalty + inactionPenalty;
-    	}
-
-		// computes tau1
-    	private double getTau1() {
-    		try {
-    			return this.restrictToWindow(this.precedingNeighbours.stream()
-        				.filter(n -> n.action != 0).map(n -> n.action + timeBetween(n, this)).mapToDouble(Double::doubleValue).max().getAsDouble());
-    		}
-			catch(NoSuchElementException e) { // this happens then all preceding neighbours have action 0
-				return this.initialTime;
-			}
-    	}
-    	
-    	private double getTau1Unrestricted() {
-    		try {
-    			return this.restrictToInitialTime(this.precedingNeighbours.stream()
-        				.filter(n -> n.action != 0).map(n -> n.action + timeBetween(n, this)).mapToDouble(Double::doubleValue).max().getAsDouble());
-    		}
-			catch(NoSuchElementException e) { // this happens then all preceding neighbours have action 0
-				return this.initialTime;
-			}			
-		}
-
-		// computes tau2
-    	private double getTau2() {
-    		try {
-    			return this.restrictToWindow(this.followingNeighbours.stream()
-        				.filter(n -> n.action != 0).map(n -> n.action - timeBetween(this, n)).mapToDouble(Double::doubleValue).min().getAsDouble());
-    		}
-    		catch(NoSuchElementException e) { // this happens then all following neighbours have action 0
-    			return this.finalTime;
-    		}
-    	}
-    	
-    	// computes tau1 of this ignoring the effect of node n
-		public double getTau1Ignoring(Node node) {
-			try {
-				return this.restrictToWindow(this.precedingNeighbours.stream()
-	    				.filter(n -> (n.action != 0) && (n.id != node.id)).map(n -> n.action + timeBetween(n, this)).mapToDouble(Double::doubleValue).max().getAsDouble());
-			}
-			catch(NoSuchElementException e) { // this happens then all preceding neighbours have action 0 (possibly with the exception of node)
-				return this.initialTime;
-			}
-    		
-    	}
-
-    	// computes tau2 of this ignoring the effect of node n
-		public double getTau2Ignoring(Node node) {
-			try {
-				return this.restrictToWindow(this.followingNeighbours.stream()
-	    				.filter(n -> (n.action != 0) && (n.id != node.id)).map(n -> n.action - timeBetween(this, n)).mapToDouble(Double::doubleValue).min().getAsDouble());
-			}
-			catch(NoSuchElementException e) { // this happens then all following neighbours have action 0 (possibly with the exception of node)
-				return this.finalTime;
-			}
-    	}
+    	}  	
     }
     
+    // time needed to execute n1 and fly to n2 (assuming each UAV has the same velocity)
 	double timeBetween(Node n1, Node n2) {
 		return n1.searchPattern.getDuration() + Math.ceil(n1.searchPattern.getOrigin().distance(n2.searchPattern.getOrigin())/Parameters.uavVelocity);
 	}
-    
-	// method for checking compatibility between nodes. Two nodes are compatible if and only if no matter their starting times, there is no conflict between them
-	boolean areNodesConflicting(Node n1, Node n2) {
-		// there are three possible situations:
-		// 1. not overlapping window: must be checked
-		// 2. one window is subset of another: they are conflicting
-		// 3. partially overlapping windows: they are conflicting
+	
+	// penalty Phi_F associated to nodes v and w
+	public double penalty(Node v, Node w) {
+		if (v.action == 0 || w.action == 0) {
+			return 0;
+		}
 		
-		// first, order them by who starts first
-		Node tmp;
-		if (n2.initialTime < n1.initialTime) {
-			tmp = n1;
-			n1 = n2;
-			n2 = tmp;
-		}
-				
-		// situation 2 and 3:
-		if (n1.finalTime > n2.initialTime)	
-			return true;
-		else { // situation 1:
-			//System.out.println("D(" + n1.id + ", " + n2.id + ") = " + (n1.searchPattern.getDuration() + Math.ceil(n1.searchPattern.getOrigin().distance(n2.searchPattern.getOrigin())/Parameters.uavVelocity))); 
-			return n1.finalTime + timeBetween(n1, n2) > n2.initialTime;
-		}
+		return Math.min(Math.max(w.action - v.action, 0), Math.max(v.action + timeBetween(v, w) - w.action, 0));
 	}
-                
+      
+	// computes the utility of the given node (sum of the neighbours' penalties and its own's)
+	public double utility(Node v, double f, boolean print) {
+		
+		double penalty = 0;
+		for (Node w : v.backwardNeighbours) {
+			penalty += penalty(w, v);
+			if (print && penalty(w,v) > 0) System.out.println("Penalty with backward node " + w.id + ": " + penalty(w,v));
+		}
+		for (Node w : v.forwardNeighbours) {
+			penalty += penalty(v, w);
+			if (print && penalty(w,v) > 0) System.out.println("Penalty with forward node " + w.id + ": " + penalty(v,w));
+		}
+		
+		if (print) {
+			System.out.println("Utility of node " + v.id + " under action " + v.resource + ", " + v.action + ":");
+			System.out.println("penalty " + penalty + ", K*penalty " + Parameters.K*penalty + ", f " + f + ", utility " + (- Parameters.K*penalty + f));
+		}
+		
+		return - Parameters.K*penalty + f;
+	}
+    
+	// from a graph to an assignment
+    private HashMap<UAV, ArrayList<SearchPattern>> convertToAssignment(List<Node> graph) {
+    	        
+    	HashMap<UAV, ArrayList<SearchPattern>> assignments = new HashMap<>();
+    	
+        // assigning plan to UAVs
+    	for (UAV u : State.getUAVs()) {
+            assignments.put(u, (ArrayList<SearchPattern>) graph.stream().filter(n -> n.resource.equals(u.getUavName())).sorted(nodeComparator)
+    															.map(n -> n.searchPattern).collect(Collectors.toList()));
+    	}
+		return assignments;
+	}
+    
+    // from an assignment to a plan
+	private ArrayList<SearchPattern> convertToPlanList(HashMap<UAV, ArrayList<SearchPattern>> assignment) {
+				
+		ArrayList<SearchPattern> toReturn = new ArrayList<SearchPattern>();
+		for (UAV u : assignment.keySet()) {
+			toReturn.addAll(assignment.get(u));
+		}
+		
+		return toReturn;
+	}
+    
+	// feasibility of an assignment
+	private boolean isFeasible(HashMap<UAV, ArrayList<SearchPattern>> assignment) {
+		
+		for (UAV u : assignment.keySet()) {
+			List<SearchPattern> partialplan = assignment.get(u);
+			
+			if (partialplan.isEmpty())
+				return false;
+			
+	        int startTime = 0;
+	        SearchPattern previous = null;
+
+			for (SearchPattern sp : partialplan) {
+	            startTime =  new Double(Math.max(startTime+distanceSP(previous,sp,u),sp.getMinT())).intValue();
+	            if (startTime > sp.getMaxT())
+	            	return false;
+	            previous = sp;
+			}
+		}
+		
+		return true;
+	}
+
+	// feasibility of a configuration
+	private boolean isFeasible(List<Node> graph) {
+		
+		for (UAV u : State.getUAVs()) {
+			List<SearchPattern> partialplan = graph.stream().filter(n -> n.resource.equals(u.getUavName())).sorted(nodeComparator)
+												   .map(n -> n.searchPattern).collect(Collectors.toList());
+			
+			if (partialplan.isEmpty())
+				return false;
+			
+	        int startTime = 0;
+	        SearchPattern previous = null;
+
+			for (SearchPattern sp : partialplan) {
+	            startTime =  new Double(Math.max(startTime+distanceSP(previous,sp,u),sp.getMinT())).intValue();
+	            if (startTime > sp.getMaxT())
+	            	return false;
+	            previous = sp;
+			}
+		}
+		
+		return true;
+	}
+
+	// comparator to order nodes (which one begins first)
+    public Comparator<Node> nodeComparator = new Comparator<Node>() {
+        @Override
+        public int compare(Node n1, Node n2) {
+            return (int) (n1.action - n2.action);
+        }
+    };
+        
 	/*
 	 * function createGraph(): takes a list of search patterns. Does:
 	 * 1. Creates all nodes, duplicating search patterns if necessary
@@ -225,43 +195,46 @@ public class Distributed extends SolverManager {
     List<Node> createGraph(List<SearchPattern> candidates){
     	
     	// greedy initialization - produce the greedy schedule
-    	HashMap<UAV,ArrayList<SearchPattern>> sequence = new GreedyAlgorithm(candidates).sequence();
+    	HashMap<UAV,ArrayList<SearchPattern>> sequence = new GreedyAlgorithm(candidates).sequence(); // result of greedy algorithm
 		HashMap<SearchPattern, Integer> greedyPlan = new HashMap<>(); // greedy schedule
-        for (UAV u : sequence.keySet()){ // there is only one UAV
-			List<SearchPattern> planList = sequence.get(u); // search patterns resulting from the greedy schedule
-	        int time = State.getTime() + 1;
+		HashMap<SearchPattern, UAV> whichUAV = new HashMap<>(); // which UAV does each search pattern
+        for (UAV u : sequence.keySet()){ 
 	        int startTime = 0;
 	        SearchPattern previous = null;
 	        for (SearchPattern sp : sequence.get(u)){
 	            startTime =  new Double(Math.max(startTime+distanceSP(previous,sp,u),sp.getMinT())).intValue();
 	            greedyPlan.put(sp, startTime);
+	            whichUAV.put(sp, u);
 	            previous = sp;
 	        }
         }
-        System.out.println("Greedy plan: " + greedyPlan.toString() + "\n");
     	
     	List<Node> nodesList = new ArrayList<>();
-    	int id = 0;
+    	int id = 1;
     	for (SearchPattern sp : candidates) {
-    		System.out.println(sp.toString() + " " + (sp.getMinT()) + "-" + (sp.getMaxT()));   		
     		double numSplits = Math.ceil((sp.getMaxT()-sp.getMinT())/sp.getDuration());
     		double sizeSplits = Math.floor((sp.getMaxT()-sp.getMinT())/numSplits);
     		double ti = sp.getMinT();
     		double tf = ti + sizeSplits;
     		for (int k = 0; k < numSplits; k++) {
     			
-    			Node n = new Node(id, sp, ti, tf); 			
+    			Node n = new Node(id, sp, ti, tf);
+    			if (Parameters.verbose) System.out.println("Node added. Id " + id + " search pattern " + sp.toString() + " (time window " + ti + "-" + tf + ")");
+    			id += 1;
         		
         		// greedy initialization
         		if(greedyPlan.containsKey(sp)){
         			if(greedyPlan.get(sp) >= ti && greedyPlan.get(sp) < tf){
-        				n.action = greedyPlan.get(sp);
-        			}	
+        				n.setAction(whichUAV.get(sp).getUavName(), greedyPlan.get(sp));
+        				if (Parameters.verbose) System.out.println("Node " + n.id + " initialized at " + n.resource + ", action " + n.action);
+        			}
+        		}
+        		else {
+        			if (Parameters.verbose) System.out.println("Node " + n.id + " initialized at " + n.resource + ", action " + n.action);
         		}
         		
     			nodesList.add(n);
-				System.out.println("Node added. Id " + id + " search pattern " + sp.toString() + " (time window " + ti + "-" + tf + ")");
-				id += 1;
+				
     			ti = tf;
     			tf = ti + sizeSplits;
     		}
@@ -271,343 +244,347 @@ public class Distributed extends SolverManager {
     	for (Node n : nodesList)
     		n.setNeighbours(nodesList);
 		
-		System.out.println("Created graph. Search patterns: " + candidates.size() + ". Nodes: " + nodesList.size());
+		System.out.println("Created graph. Search patterns: " + candidates.size() + ". Nodes: " + nodesList.size() + "\n");
 		
     	return nodesList;
     }
     
-    private ArrayList<SearchPattern> convertToPlan(List<Node> graph) {
-		return (ArrayList<SearchPattern>) graph.stream().filter(n -> n.action != 0).sorted(nodeComparator)
-				.map(n -> n.searchPattern).collect(Collectors.toList());
-	}
-
-	private boolean isFeasible(ArrayList<SearchPattern> newPlanSkeleton) {
-		if (newPlanSkeleton.isEmpty())
-			return false;
-		
-        int startTime = 0;
-        SearchPattern previous = null;
-        UAV u = uavs.get(0); // (assuming 1 uav)
-
-		for (SearchPattern sp : newPlanSkeleton) {
-            startTime =  new Double(Math.max(startTime+distanceSP(previous,sp,u),sp.getMinT())).intValue();
-            if (startTime > sp.getMaxT())
-            	return false;
-            previous = sp;
-		}
-		return true;
-	}
-
-	// comparator to order nodes (which one begins first)
-    public Comparator<Node> nodeComparator = new Comparator<Node>() {         // Node Comparator: which one comes first
-        @Override
-        public int compare(Node n1, Node n2) {
-            return (int) (n1.action - n2.action);
-        }
-    };
-    
-    public Comparator<SearchPattern> searchPatternComparator = new Comparator<SearchPattern>() {         // Node Comparator: which one comes first
-        @Override
-        public int compare(SearchPattern sp1, SearchPattern sp2) {
-            return sp1.toString().compareTo(sp2.toString());
-        }
-    };
-        
-    // function that for each UAV (so far only one) gives its plan as a list of SearchPattern
+    // function that for each UAV gives its plan as a list of SearchPattern
     // it's the function that samples!
     public HashMap<UAV, ArrayList<SearchPattern>> sequence() {  
     	
     	double timezero = System.currentTimeMillis(); // saving initial time
-        List<Node> graph = createGraph(candidateSearchPattern); // Definition and creation of the graph
-        double eta = Parameters.eta;   // Noise parameter
+    	double eta = Parameters.eta; // Noise parameter
+    	
+    	// Definition and creation of the graph
+        List<Node> graph = createGraph(candidateSearchPattern); 
                 
-        // initialising variables for the iterations 
-        ArrayList<SearchPattern> bestPlan = convertToPlan(graph); // best configuration
-        double Gmax = evaluate(bestPlan); // best value of the functional
-        System.out.println("Starting at plan " + bestPlan.toString() + " of value " + Gmax);
+        // evaluating initial configuration
+    	HashMap<UAV, ArrayList<SearchPattern>> bestAssignment = convertToAssignment(graph); // best configuration - assignment
+        ArrayList<SearchPattern> bestPlanList = convertToPlanList(bestAssignment); // best configuration - plan
+    	Plan plan = createPlan(bestPlanList, graph.size());
+    	double fmax = plan.f;
+        System.out.println("Starting at assignment " + bestAssignment.toString() + "\nof value " + fmax);
+        boolean feas = isFeasible(bestAssignment);
+        
+        // initialising variables that change at each iteration
         Node sampledNode;
-        double u0;
-        double p0;
+        double u0, p0;
     	Set<Double> partition = new HashSet<>();
     	double timeBetween;
-    	double tt1;
-    	double tt2;
-    	Double[] a;
-    	Double[] b;
-    	double[] C;
-    	double integral;
-    	double pTime;
-    	double Z;
-        double previousAction;
-        double newAction;
-        
-        // initialising variables for plan evaluation
-        double G;
-        int minsize;
-        int firstDifferent;
-        ArrayList<SearchPattern> prevPlanSkeleton = new ArrayList<>();
-        ArrayList<SearchPattern> newPlanSkeleton = new ArrayList<>(); 
-        double[] PSarray = new double[graph.size()];
-        double[] TSarray = new double[graph.size()];
-        HashMap<Integer, HashMap<List<Position>, Double>> pDestarray = new HashMap<>();
-        double[] pStararray = new double[graph.size()];        
-		double PS = 0;
-		double TS = 0;
-		double pStar;
-		double newPS;
-        double gamma;
-        int nDestination = cityNameMapping.size();
-        double pi = 1. / nDestination;	
-        int ind;
-        double previous;
-        double pC;
+    	Double[] a, b, C;
+    	double integral, Z;
+        double previousAction, newAction;
+        String previousResource;
+        double f;
                 
-        // register of the plan skeletons
-        HashSet<String> register = new HashSet<>();
-        String s;
+        // register of all plans found and their value
+        HashMap<HashMap<UAV, ArrayList<SearchPattern>>, Double> register = new HashMap<>();
+        HashMap<UAV, ArrayList<SearchPattern>> assignment;
+        if (feas) register.put(bestAssignment, fmax);
         
-        /*
-        // for "time progression"
-        double timeProgressionStep = 1000; // 1000 ms = 1 s 
-        double timeProgressionCheck = System.currentTimeMillis();
-    	try {
-            Files.write(Paths.get("time_progression.txt"), ("\n" + Gmax + " ").getBytes(), StandardOpenOption.APPEND); // va a caporiga per la nuova istanza
-        }catch (IOException e) {
-            //exception handling left as an exercise for the reader
-        }
-    	try {
-            Files.write(Paths.get("distinct_plans.txt"), ("\n" + register.size() + " ").getBytes(), StandardOpenOption.APPEND);
-        }catch (IOException e) {
-            //exception handling left as an exercise for the reader
-        }
-        */
-        
-        // Start iterations that update attribute "action" in the nodes
+        // Start iterations
         Random r = new Random(Parameters.seed);
         double elapsed = System.currentTimeMillis() - timezero;
         double timeOut = Parameters.planTimeLimit*1000;
         int iterationsCount = 0;
+        int feasibleIterations = 0;
 		while (elapsed < timeOut) {
-			
-			/*
-			if (System.currentTimeMillis() - timeProgressionCheck > timeProgressionStep) {
-				timeProgressionCheck = System.currentTimeMillis();
-		    	try {
-		            Files.write(Paths.get("time_progression.txt"), (Gmax + " ").getBytes(), StandardOpenOption.APPEND);
-		        }catch (IOException e) {
-		            //exception handling left as an exercise for the reader
-		        }
-		    	try {
-		            Files.write(Paths.get("distinct_plans.txt"), (register.size() + " ").getBytes(), StandardOpenOption.APPEND);
-		        }catch (IOException e) {
-		            //exception handling left as an exercise for the reader
-		        }
-			}
-			*/
 			
         	iterationsCount += 1;
         	
-        	//System.out.println("\n\nIteration " + iterationsCount);
+        	boolean verbose3 = (iterationsCount <= Parameters.printIterations);
         	
-        	// sampling
-        	sampledNode = graph.get(r.nextInt(graph.size())); // sample random node 
-        	previousAction = sampledNode.action; // previous action (to be changed)
-        	//previousUtility = sampledNode.utility();
-        	/*
-        	System.out.println("\nSampled node " + sampledNode.toString() + " of neighbours: ");
-        	for (Node n : sampledNode.precedingNeighbours) {
-        		System.out.println(n.toString() + ", action " + n.action + " time between: " + timeBetween(n, sampledNode) + " tau2: " + n.getTau2Ignoring(n));
-        	}
-        	for (Node n : sampledNode.followingNeighbours) {
-        		System.out.println(n.toString() + ", action " + n.action + " time between: " + timeBetween(sampledNode, n) + " tau1: " + n.getTau1Ignoring(n));
-        	}
-        	*/
+        	// sample random node
+        	sampledNode = graph.get(r.nextInt(graph.size()));
+        	previousAction = sampledNode.action; 
+        	previousResource = sampledNode.resource;
         	
         	// utility of action = 0
-        	sampledNode.action = 0;
-        	u0 = sampledNode.utility();
-        	//System.out.println("Utility of 0: " + u0);
-        	p0 = Parameters.delta*Math.exp(eta*u0);
-        	
-        	// adding knots to the partition
-        	partition.clear();
-        	double initialTime = sampledNode.initialTime; // create ogni volta altrimenti bisticcia con stream.filter
-        	double finalTime = sampledNode.finalTime;
-        	partition.add(initialTime);
-        	partition.add(finalTime);
-        	for (Node n : sampledNode.precedingNeighbours) {
-        		timeBetween = timeBetween(n, sampledNode);
-        		if (n.action == 0) partition.add(n.getTau2Ignoring(sampledNode) + timeBetween); // earliest time of departure
-        		else partition.add(n.action + timeBetween);
-        	}
-        	for (Node n : sampledNode.followingNeighbours) {
-        		timeBetween = timeBetween(sampledNode, n);
-        		if (n.action == 0) partition.add(n.getTau1Ignoring(sampledNode) - timeBetween); // earliest time of arrival
-        		else partition.add(n.action - timeBetween);
+        	if (verbose3) {
+        		System.out.println("\nSampled node " + sampledNode.id + " of action " + sampledNode.resource + ", " + sampledNode.action + " and window " + sampledNode.initialTime + " - " + sampledNode.finalTime);
+        		/*
+        		System.out.println("Neighbours: ");
+        		for (Node n : sampledNode.backwardNeighbours) {
+        			System.out.println(n.id + " of action " + n.action + " and timebetween " + timeBetween(n, sampledNode) + " and window " + n.initialTime + " - " + n.finalTime);
+        		}
+        		for (Node n : sampledNode.forwardNeighbours) {
+        			System.out.println(n.id + " of action " + n.action + " and timebetween " + timeBetween(sampledNode, n) + " and window " + n.initialTime + " - " + n.finalTime);
+        		}
+        		*/
         	}
         	
-        	// filtering out knots and building vector a
-        	a = partition.stream().filter(d -> d >= initialTime && d <= finalTime).toArray(Double[]::new);       	
-        	Arrays.sort(a);
-        	
-        	// defining vector b
-        	b = new Double[a.length];
-        	for (int i = 0; i < a.length; i++) {
-        		sampledNode.action = a[i];
-        		b[i] = sampledNode.utility(); 
+        	sampledNode.setAction("noresource", 0);
+        	// get value of f
+        	assignment = convertToAssignment(graph);
+        	if (!isFeasible(assignment)) f = 0;
+        	else if (register.containsKey(assignment)) f = register.get(assignment);
+        	else {
+        		plan = updatePlan(plan, convertToPlanList(assignment));
+        		f = plan.f;
+        		register.put(assignment, f);
         	}
+        	u0 = utility(sampledNode, f, false);
+        	p0 = Parameters.delta*Math.exp(eta*u0); // unnormalized probability mass of action 0
+        	Z = p0; // total unnormalized probability mass (to be incremented with the other actions)
+        	if (verbose3) System.out.println("Evaluated action 0. Utility of 0: " + u0 + ", prob: " + p0);
         	
-        	// sampling new action
-        	C = getC(a, b, eta);
-        	integral = 0;
-        	for (int i = 1; i < C.length; i++) {
-        		integral += C[i];
+        	// initialize maps: for each UAV, partition, utilities and integrals
+        	HashMap<UAV, Double[]> aa = new HashMap<UAV, Double[]>();
+        	HashMap<UAV, Double[]> bb = new HashMap<UAV, Double[]>();
+        	HashMap<UAV, Double[]> CC = new HashMap<UAV, Double[]>();
+        	HashMap<UAV, Double> probs = new HashMap<UAV, Double>(); // for each UAV, the unnormalized probability mass of its actions
+        	for (UAV u : State.getUAVs()) { // loop on resources
+        		
+	        	partition.clear();
+	        	double initialTime = sampledNode.initialTime;
+	        	double finalTime = sampledNode.finalTime;
+        		
+	        	// adding knots to the partition
+	        	partition.add(initialTime);
+	        	partition.add(finalTime);
+	        	
+	        	for (Node n : sampledNode.backwardNeighbours) {	        		
+	        		if (n.action == 0 || !n.resource.equals(u.getUavName())) continue; // only those that are active and under the same resource
+	        		timeBetween = timeBetween(n, sampledNode); // time needed to execute n and fly to sampledNode
+	        		// those outside sampleNode's time window will be later filtered out
+	        		partition.add(n.action);
+	        		partition.add(n.action + timeBetween/2);
+	        		partition.add(n.action + timeBetween);
+	        	}
+	        	for (Node n : sampledNode.forwardNeighbours) {
+	        		if (n.action == 0 || !n.resource.equals(u.getUavName())) continue; // only those under the same resource
+	        		timeBetween = timeBetween(sampledNode, n); // time needed to execute sampleNode and fly to n
+	        		// those outside sampleNode's time window will be later filtered out
+	        		partition.add(n.action - timeBetween);
+	        		partition.add(n.action - timeBetween/2);
+	        		partition.add(n.action);
+	        	}
+	        	
+	        	// filtering out knots and building vector a
+	        	a = partition.stream().filter(d -> d >= initialTime && d <= finalTime).toArray(Double[]::new);       	
+	        	Arrays.sort(a);
+	        	aa.put(u, a);
+	        	
+	        	// defining vector b
+	        	b = new Double[a.length];
+	        	sampledNode.setAction(u.getUavName(), a[0]);
+	        	assignment = convertToAssignment(graph);
+	        	if (!isFeasible(assignment)) f = 0;
+	        	else if (register.containsKey(assignment)) f = register.get(assignment);
+	        	else {
+	        		plan = updatePlan(plan, convertToPlanList(assignment));
+	        		f = plan.f;
+	        		register.put(assignment, f);
+	        	}
+	        	b[0] = utility(sampledNode, f, false);	        	
+	        	if (verbose3) System.out.println("Evaluated action " + a[0] + ": utility " + b[0] + ", prob: " + Math.exp(Parameters.eta*b[0]));
+	        	for (int i = 1; i < a.length; i++) {
+	        		sampledNode.setAction(u.getUavName(), a[i]);
+	        		b[i] = utility(sampledNode, f, false);	        		
+	        		if (verbose3) System.out.println("Evaluated action " + a[i] + ": utility " + b[i] + ", prob: " + Math.exp(Parameters.eta*b[i]));
+	        	}
+	        	bb.put(u, b);
+	        	
+	        	// sampling new action
+	        	C = getC(a, b, eta);
+	        	integral = 0;
+	        	for (int i = 1; i < C.length; i++) {
+	        		integral += C[i];
+	        	}
+	        	CC.put(u, C);
+	        	
+	        	double probU = integral/(Parameters.nUAV*sampledNode.windowWidth);
+	        	//double probU = integral;
+	        	if (verbose3) System.out.println("Integral of " + u.getUavName() + ": " + probU);
+	        	Z += probU;
+	        	probs.put(u, probU);
         	}
-        	pTime = (1-Parameters.delta)*integral/sampledNode.windowWidth;
-        	Z = p0 + pTime;
-        	
-        	//double meanutil = getmeanutil(a, b);
-        	//System.out.println("Action 0: u0 = " + u0 + " Math.exp(u0) = " + p0 + " p0 = " + (p0/Z));
-        	//System.out.println("Action t: umean = " + meanutil + " exp(eta*meanutil) = " + Math.exp(eta*meanutil) + " integral: " + integral + " integral normalized = " + pTime + " pTime = " + (pTime/Z));
-        	
-        	if (r.nextDouble()*Z < p0) {
-        		newAction = 0;
-        		sampledNode.action = newAction;
+        	        	        	
+        	double y = r.nextDouble()*Z;
+        	if (y < p0) {
+        		sampledNode.setAction("noresource", 0);
+        		if (verbose3) System.out.println("y: " + y + " Z: " + Z + ", sampled: " + sampledNode.action + ", " + sampledNode.resource);
         	}
         	else {
-        		newAction = sample(a, b, C, integral, eta, r);
-        		sampledNode.action = newAction;
+        		double cumprob = p0;
+        		for (UAV u : probs.keySet()) {
+        			if (y <= cumprob + probs.get(u)) {
+        				newAction = sample(aa.get(u), bb.get(u), CC.get(u), probs.get(u), eta, r);        				
+        				sampledNode.setAction(u.getUavName(), newAction);
+        				if (verbose3) System.out.println("y: " + y + " Z: " + Z + ", sampled: " + sampledNode.action + ", " + sampledNode.resource);
+                		break;
+        			}
+        			cumprob += probs.get(u);
+        		}
+        		
         	}
-        	
-        	//System.out.println("New action: " + newAction);
-        	//System.out.println("Utility of new action: " + sampledNode.utility());
-        	//System.out.println(sampledNode.precedingNeighbours);
-        	//System.out.println(sampledNode.followingNeighbours);
 
-        	// if action didn't change, set it back and go to next loop iteration
-        	if (newAction == previousAction) 
+        	// if action didn't change go to next loop iteration
+        	if (sampledNode.action == previousAction && sampledNode.resource.equals(previousResource)) {
         		continue;
-        	
-        	// if action changed, update Psi
-        	//newUtility = sampledNode.utility();
-    		//Psi = Psi - previousUtility + newUtility;  
-    		//System.out.println("Action changed. New utility: " + newUtility + " Psi: " + Psi);
+        	}
     			
-    		newPlanSkeleton = convertToPlan(graph); // extract plan skeleton
-    		if (isFeasible(newPlanSkeleton)) {   
-	    		
-	    		// add to register if new
-		    	s = newPlanSkeleton.toString();
-		    	if (register.contains(s))
-		    		continue;
-	    		register.add(s);
-	    		//numPlansEvaluated += 1;
-    			//System.out.println("Evaluating new plan " + s);
-	    		
-	    		// START EVALUATION
-		    	// extracts index of first different search pattern
-    			minsize = Math.min(prevPlanSkeleton.size(), newPlanSkeleton.size());
-    			firstDifferent = minsize; // assumed to be one subset of the other. This also over prev = empty
-		    	for (int k = 0; k < minsize; k++) {
-		    		if (prevPlanSkeleton.get(k) != newPlanSkeleton.get(k)) {
-		    			firstDifferent = k;
-		    			break;
-		    		}
-		    	}
-	
-				// continuing
-				for (int k = firstDifferent; k < newPlanSkeleton.size(); k++) {
-					// PS
-					if (k == 0) {
-						newPS = 0;						
-					}
-					else {
-						PS = PSarray[k-1];
-						pStar = pStararray[k-1];
-						newPS = PS + pStar*(1-PS);
-						//System.out.println("PS update: k = " + k + ", PS = " + newPS);
-					}
-					PSarray[k] = newPS;
-										
-					// TS
-					if (k == 0) {
-						TS = 0;
-					}
-					else {
-						TS = TS + (newPlanSkeleton.get(k-1).getMaxT()+newPlanSkeleton.get(k-1).getMinT())*0.5/maxExpectedTime*(newPS - PS);
-					}
-					TSarray[k] = TS;
-					
-					// PSdest
-					HashMap<List<Position>, Double> toInsert = new HashMap<>();
-					if (k == 0) {
-						for (List<Position> d : cityNameMapping.keySet()) {
-							toInsert.put(d, pi);  // initialised with the uniform a priori
-						}
-					}
-					else {
-						gamma = newPlanSkeleton.get(k-1).getGamma(); // gamma_k is needed, but list indexing starts at 0
-						for (List<Position> x : cityNameMapping.keySet()) {
-							if (newPlanSkeleton.get(k-1).getCompatibleDestinations().contains(x))
-								ind = 1;
-							else 
-								ind = 0;
-							
-							previous = pDestarray.get(k-1).get(x);
-							pStar = pStararray[k-1];
-							toInsert.put(x, previous*(1-gamma*ind)/(1-pStar));
-						}
-					}
-					pDestarray.put(k, toInsert);
-																									
-					// pS 
-					pStar = newPlanSkeleton.get(k).getGamma();
-					pC = 0;
-					for (List<Position> y : newPlanSkeleton.get(k).getCompatibleDestinations()) {
-						pC += pDestarray.get(k).get(y);
-					}
-					pStar *= pC;
-					pStararray[k] = pStar;
-				}
-				
-				prevPlanSkeleton = newPlanSkeleton;
-		
-				// final
-				PS = PSarray[newPlanSkeleton.size()-1];
-				TS = TSarray[newPlanSkeleton.size()-1];
-				pStar = pStararray[newPlanSkeleton.size()-1];
-				newPS = PS + pStar*(1-PS);
-				TS = TS + (newPlanSkeleton.get(newPlanSkeleton.size()-1).getMaxT() + newPlanSkeleton.get(newPlanSkeleton.size()-1).getMinT())*0.5/maxExpectedTime*(newPS - PS);
-				PS = newPS;
-				G = PS - Parameters.weight*TS;
-				
-		    	if (G > Gmax){
-		    		Gmax = G;
-		    		bestPlan = newPlanSkeleton;		    		            
-		    		System.out.println("Plan updated. Iteration: " + iterationsCount + " New plan: " + bestPlan.toString() + " value: " + Gmax);
+    		if (isFeasible(graph)) {
+    			feasibleIterations += 1;
+	        	assignment = convertToAssignment(graph);
+	        	if (!isFeasible(assignment)) f = 0;
+	        	else if (register.containsKey(assignment)) f = register.get(assignment);
+	        	else {
+	        		plan = updatePlan(plan, convertToPlanList(assignment));
+	        		f = plan.f;
+	        		register.put(assignment, f);
+	        	}
+		    	if (f > fmax){
+		    		fmax = f;
+		    		bestAssignment = assignment;
+		    		System.out.println("Plan updated. Iteration: " + iterationsCount + " New plan: " + bestAssignment.toString() + " value: " + fmax);
 		    	}
     		}
     		elapsed = System.currentTimeMillis() - timezero;
         }
-		
-		System.out.println("Iterations: " + iterationsCount + " Distinct plans: " + register.size()); 
-        		
-        // assigning plan to UAV
-    	HashMap<UAV, ArrayList<SearchPattern>> assignments = new HashMap<>();
-        assignments.put(uavs.get(0), bestPlan);
-        
-    	return assignments;
+	
+		int feasiblePlans = 0;
+		for (HashMap<UAV, ArrayList<SearchPattern>> assment : register.keySet()) {
+			if (isFeasible(assment)){
+				feasiblePlans += 1;
+				if(register.get(assment) > fmax) {
+					fmax = register.get(assment);
+					bestAssignment = assment;
+		    		System.out.println("There was a better plan in the register: " + bestAssignment.toString() + " value: " + fmax);
+				}
+			}
+		}
+		System.out.println("Iterations " + iterationsCount + ", feasible " + feasibleIterations + ", feasible plans " + feasiblePlans + ", fmax: " + fmax); 
+    	return bestAssignment;
     }
 
-	// calcolo della costante Z di normalizzazione attraverso C
-    private double[] getC(Double[] a, Double[] b, double eta) {
+    /*
+	private double getValue(HashMap<HashMap<UAV, ArrayList<SearchPattern>>, Double> register, List<Node> graph) {
+				
+		HashMap<UAV, ArrayList<SearchPattern>> assignment = convertToAssignment(graph);
+		if (!isFeasible(assignment)) return 0;
+    			
+    	if (register.containsKey(assignment)) { 
+    		return register.get(assignment);
+    	}
+    	else { // add to register if new
+    		double f = evaluate(convertToPlan(assignment));
+    		register.put(assignment, f);
+    		return f;
+    	}	
+	}
+	*/
+    
+    // class to memorize a plan along with its arrays to compute the value f(S)
+    public class Plan {
+    	private ArrayList<SearchPattern> list;
+    	private double[] PSarray, pStararray;
+    	HashMap<Integer, HashMap<List<Position>, Double>> pDestarray;
+    	double f;
+    	
+    	public Plan(ArrayList<SearchPattern> list, double[] PSarray, double[] pStararray, HashMap<Integer, HashMap<List<Position>, Double>> pDestarray){
+    		this.list = list;
+    		this.PSarray = PSarray;
+    		this.pStararray = pStararray;
+    		this.pDestarray = pDestarray;
+    	}
+    	
+    	public Plan(ArrayList<SearchPattern> list, double[] PSarray, double[] pStararray, HashMap<Integer, HashMap<List<Position>, Double>> pDestarray, double f){
+    		this.list = list;
+    		this.PSarray = PSarray;
+    		this.pStararray = pStararray;
+    		this.pDestarray = pDestarray;
+    		this.f = f;
+    	}
+    }
+
+	private Plan updatePlan(Plan plan, ArrayList<SearchPattern> newList) {
+		
+		Plan newPlan = new Plan(newList, plan.PSarray, plan.pStararray, plan.pDestarray);
+				
+    	// extracts index of first different search pattern
+		int minsize = Math.min(plan.list.size(), newList.size());
+		int firstDifferent = minsize; // assumed to be one subset of the other. This also over prev = empty
+    	for (int k = 0; k < minsize; k++) {
+    		if (plan.list.get(k) != newList.get(k)) {
+    			firstDifferent = k;
+    			break;
+    		}
+    	}
+    	
+    	// initializing
+    	double newPS, PS, pStar;
+    	double gamma;
+    	int ind;
+    	double previous;
+    	int nDestination = cityNameMapping.size();
+        double pi = 1. / nDestination;	
+
+		// continuing
+		for (int k = firstDifferent; k < newPlan.list.size(); k++) {
+			// PS
+			if (k == 0) {
+				newPS = 0;						
+			}
+			else {
+				PS = plan.PSarray[k-1];
+				pStar = plan.pStararray[k-1];
+				newPS = PS + pStar*(1-PS);
+				//System.out.println("PS update: k = " + k + ", PS = " + newPS);
+			}
+			newPlan.PSarray[k] = newPS;
+			
+			// PSdest
+			HashMap<List<Position>, Double> toInsert = new HashMap<>();
+			if (k == 0) {
+				for (List<Position> d : cityNameMapping.keySet()) {
+					toInsert.put(d, pi);  // initialised with the uniform a priori
+				}
+			}
+			else {
+				gamma = newPlan.list.get(k-1).getGamma(); // gamma_k is needed, but list indexing starts at 0
+				for (List<Position> x : cityNameMapping.keySet()) {
+					if (newPlan.list.get(k-1).getCompatibleDestinations().contains(x))
+						ind = 1;
+					else 
+						ind = 0;
+					
+					previous = newPlan.pDestarray.get(k-1).get(x);
+					pStar = newPlan.pStararray[k-1];
+					toInsert.put(x, previous*(1-gamma*ind)/(1-pStar));
+				}
+			}
+			newPlan.pDestarray.put(k, toInsert);
+																							
+			// pS 
+			pStar = newPlan.list.get(k).getGamma();
+			double pC = 0;
+			for (List<Position> y : newPlan.list.get(k).getCompatibleDestinations()) {
+				pC += newPlan.pDestarray.get(k).get(y);
+			}
+			pStar *= pC;
+			newPlan.pStararray[k] = pStar;
+		}
+		
+		// final
+		PS = newPlan.PSarray[newPlan.list.size()-1];
+		pStar = newPlan.pStararray[newPlan.list.size()-1];
+		PS = PS + pStar*(1-PS);
+		newPlan.f = PS;
+		return newPlan;
+	}
+
+	// computes the integral of piecewise exponential and continuous function exp(eta*u) with u defined by the knots a_i, b_i
+	// returns an array of the integrals on each segment [a_(i-1), a_i]
+    private Double[] getC(Double[] a, Double[] b, double eta) {
     	int n = a.length;
-    	double[] C = new double[n];
-    	C[0] = 0;
+    	Double[] C = new Double[n];
+    	C[0] = 0.0;
     	double previousExp = Math.exp(eta*b[0]);
     	double newExp;
     	for (int i = 1; i < n; i++) {
-    		if (b[i].equals(b[i-1])) { // per evitare divisione per 0
+    		if (b[i].equals(b[i-1])) { // to avoid division by 0
     			C[i] = (a[i]-a[i-1]) * previousExp;
     		}
     		else {
@@ -615,17 +592,15 @@ public class Distributed extends SolverManager {
     			C[i] = (a[i]-a[i-1])/(b[i]-b[i-1]) * ( newExp - previousExp )/eta;
     			previousExp = newExp;
     		}
-    		//System.out.println("C[" + i + "] = " + C[i]);
     	}
     	return C;
     }
     
-    // sampling dalla densita' esponenziale a tratti univocamente definita da a e b
-    private double sample(Double[] a, Double[] b, double[] C, double integral, double eta, Random r) {
+    // sampling of the new action from density 1/integral*(exp(eta*u)) with u piecewise linear and continuous defined by the knots (a_i, b_i)
+    private double sample(Double[] a, Double[] b, Double[] C, double integral, double eta, Random r) {
     	int n = a.length;
     	double y = r.nextDouble();
     	double ybar = integral*y;
-    	//System.out.println("Z: " + integral + " y: " + y + " ybar: " + ybar);
     	double Ccum = 0;
     	int i = 0;
     	for (int j = 0; j < n; j++) {
@@ -635,44 +610,90 @@ public class Distributed extends SolverManager {
     		}
     		Ccum += C[j];
     	}
-    	//System.out.println("Ccum: " + Ccum);
     	double x;
     	if (b[i].equals(b[i-1])) {
-    		x = a[i-1] + (ybar - Ccum)*Math.exp(-eta*b[i-1]);
+    		x = a[i-1] + (ybar - Ccum)*Math.exp(-eta*b[i-1]); // to avoid division by 0
     	}
     	else {
     		x = a[i-1] + (a[i]-a[i-1])/(b[i]-b[i-1]) * ( - b[i-1] + Math.log(eta*(b[i]-b[i-1])/(a[i]-a[i-1])*(ybar - Ccum) + Math.exp(eta*b[i-1]))/eta);
     	}
 		return x;
     }
-
-    // method for evaluating T(S)
-    private double evaluateTime(List<SearchPattern> planSkeleton) {
-    	
-    	if (planSkeleton.isEmpty())
-    		return 0;
-    	
-    	// parameters
- 		int planLength = planSkeleton.size();
- 		 		
- 		// initialisation
- 		// TS 
- 		double TS = 0;
-
- 		// updating
- 		for (int k = 1; k < planLength; k++) { // does (planLength-1) loops
- 			// PS and TS
- 			TS = TS + (planSkeleton.get(k-1).getMinT() + planSkeleton.get(k-1).getMaxT())* 0.5;
- 		}
- 		
- 		// final
- 		TS = TS + (planSkeleton.get(planLength-1).getMinT() + planSkeleton.get(planLength-1).getMaxT())*0.5;
- 		
- 		return TS;
-    }
     
-	// method for evaluating G(S)
+	// method for evaluating f(S)
+ 	private Plan createPlan(ArrayList<SearchPattern> planSkeleton, int maxsize) {
+ 		 		
+ 		if (planSkeleton.isEmpty())
+ 			return new Plan(planSkeleton, new double[maxsize], new double[maxsize], new HashMap<Integer, HashMap<List<Position>, Double>>(), 0.0);
+ 		
+ 		// initializing
+ 		double[] PSarray = new double[maxsize];
+ 		double[] pStararray = new double[maxsize];
+ 		HashMap<Integer, HashMap<List<Position>, Double>> pDestarray = new HashMap<>();
+    	double newPS, PS, pStar;
+    	double gamma;
+    	int ind;
+    	double previous;
+    	int nDestination = cityNameMapping.size();
+        double pi = 1. / nDestination;	
+
+		// continuing
+		for (int k = 0; k < planSkeleton.size(); k++) {
+			// PS
+			if (k == 0) {
+				newPS = 0;						
+			}
+			else {
+				PS = PSarray[k-1];
+				pStar = pStararray[k-1];
+				newPS = PS + pStar*(1-PS);
+				//System.out.println("PS update: k = " + k + ", PS = " + newPS);
+			}
+			PSarray[k] = newPS;
+			
+			// PSdest
+			HashMap<List<Position>, Double> toInsert = new HashMap<>();
+			if (k == 0) {
+				for (List<Position> d : cityNameMapping.keySet()) {
+					toInsert.put(d, pi);  // initialised with the uniform a priori
+				}
+			}
+			else {
+				gamma = planSkeleton.get(k-1).getGamma(); // gamma_k is needed, but list indexing starts at 0
+				for (List<Position> x : cityNameMapping.keySet()) {
+					if (planSkeleton.get(k-1).getCompatibleDestinations().contains(x))
+						ind = 1;
+					else 
+						ind = 0;
+					
+					previous = pDestarray.get(k-1).get(x);
+					pStar = pStararray[k-1];
+					toInsert.put(x, previous*(1-gamma*ind)/(1-pStar));
+				}
+			}
+			pDestarray.put(k, toInsert);
+																							
+			// pS 
+			pStar = planSkeleton.get(k).getGamma();
+			double pC = 0;
+			for (List<Position> y : planSkeleton.get(k).getCompatibleDestinations()) {
+				pC += pDestarray.get(k).get(y);
+			}
+			pStar *= pC;
+			pStararray[k] = pStar;
+		}
+		
+		// final
+		PS = PSarray[planSkeleton.size()-1];
+		pStar = pStararray[planSkeleton.size()-1];
+		PS = PS + pStar*(1-PS);
+		return new Plan(planSkeleton, PSarray, pStararray, pDestarray, PS);
+ 	}
+	 
+	 
+	// method for evaluating f(S)
  	private double evaluate(List<SearchPattern> planSkeleton) {
+ 		 		
  		if (planSkeleton.isEmpty())
  			return 0;
  		
@@ -682,7 +703,7 @@ public class Distributed extends SolverManager {
  		 		
  		// initialisation
  		// TS 
- 		double TS = 0;
+ 		//double TS = 0;
  		// PS
  		double PS = 0;
  		// pDest
@@ -707,7 +728,7 @@ public class Distributed extends SolverManager {
  		for (int k = 1; k < planLength; k++) { // does (planLength-1) loops
  			// PS and TS
  			newPS = PS + pStar*(1-PS);
- 			TS = TS + (planSkeleton.get(k-1).getMinT() + planSkeleton.get(k-1).getMaxT())* 0.5/maxExpectedTime*(newPS - PS);
+ 			//TS = TS + (planSkeleton.get(k-1).getMinT() + planSkeleton.get(k-1).getMaxT())* 0.5/maxExpectedTime*(newPS - PS);
  			PS = newPS;
  			// PSdest
  			gamma = planSkeleton.get(k-1).getGamma(); // gamma_k is needed, but list indexing starts at 0
@@ -729,14 +750,14 @@ public class Distributed extends SolverManager {
  		
  		// final
  		newPS = PS + pStar*(1-PS);
- 		TS = TS + (planSkeleton.get(planLength-1).getMinT() + planSkeleton.get(planLength-1).getMaxT())*0.5/maxExpectedTime*(newPS-PS);
+ 		//TS = TS + (planSkeleton.get(planLength-1).getMinT() + planSkeleton.get(planLength-1).getMaxT())*0.5/maxExpectedTime*(newPS-PS);
  		PS = newPS;
- 		double GS = PS - Parameters.weight*TS;
- 		
- 		return GS;
+ 		//double GS = PS - Parameters.weight*TS;
+ 		 		
+ 		return PS;
  	}
     
-    // original version
+ 	// time needed to execute sp1 and fly to sp2
 	double distanceSP(SearchPattern sp1, SearchPattern sp2, UAV u){
 
         if (sp1 == null){
@@ -749,15 +770,8 @@ public class Distributed extends SolverManager {
     public HashMap<String, HashMap<Integer, List<SearchPattern>>> getPlan(){
         HashMap<String,HashMap<Integer,List<SearchPattern>>> timedPlan = new  HashMap<>();
         HashMap<UAV,ArrayList<SearchPattern>> sequence = sequence();
+		System.out.println("Solver: " + Parameters.solver + "\nSeed: " + Parameters.seed + "\n" + "Double-checking functional value: " + evaluate(convertToPlanList(sequence)) + "\n" + "plan: " + convertToPlanList(sequence).toString());
         for (UAV u : sequence.keySet()){
-		List<SearchPattern> planList = sequence.get(u);
-        	double G = evaluate(sequence.get(u));
-			System.out.println("Solver: " + Parameters.solver + "\nSeed: " + Parameters.seed + "\nUAV: " + u.getUavName() + "\nk: " + Parameters.weight + "\nDouble-checking functional value: " + evaluate(planList) + "\nExpectedTime: " + evaluateTime(planList) + "\nPlan: " + planList.toString());
-        	try {
-                Files.write(Paths.get("results.txt"), (G + "\n").getBytes(), StandardOpenOption.APPEND);
-            }catch (IOException e) {
-                //exception handling left as an exercise for the reader
-            }
         	HashMap<Integer,List<SearchPattern>> plan = new HashMap<>();
             int time = State.getTime() + 1;
             int startTime = 0;
