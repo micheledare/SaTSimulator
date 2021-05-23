@@ -770,7 +770,8 @@ public class Distributed extends SolverManager {
     public HashMap<String, HashMap<Integer, List<SearchPattern>>> getPlan(){
         HashMap<String,HashMap<Integer,List<SearchPattern>>> timedPlan = new  HashMap<>();
         HashMap<UAV,ArrayList<SearchPattern>> sequence = sequence();
-		System.out.println("Solver: " + Parameters.solver + "\nSeed: " + Parameters.seed + "\n" + "Double-checking functional value: " + evaluate(convertToPlanList(sequence)) + "\n" + "plan: " + convertToPlanList(sequence).toString());
+        double fmax = evaluate(convertToPlanList(sequence));
+		System.out.println("Solver: " + Parameters.solver + "\nSeed: " + Parameters.seed + "\n" + "fmax value: " + fmax + "\n" + "plan: " + convertToPlanList(sequence).toString());
         for (UAV u : sequence.keySet()){
         	HashMap<Integer,List<SearchPattern>> plan = new HashMap<>();
             int time = State.getTime() + 1;
