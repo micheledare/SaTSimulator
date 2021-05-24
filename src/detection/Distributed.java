@@ -78,11 +78,18 @@ public class Distributed extends SolverManager {
 	
 	// penalty Phi_F associated to nodes v and w
 	public double penalty(Node v, Node w) {
-		if (v.action == 0 || w.action == 0) {
+		if (v.action == 0 || w.action == 0 || !v.resource.equals(w.resource)) {
 			return 0;
 		}
 		
-		return Math.min(Math.max(w.action - v.action, 0), Math.max(v.action + timeBetween(v, w) - w.action, 0));
+		
+		double mu = Math.min(Math.max(v.action + timeBetween(v,w) - w.action, 0), Math.max(w.action + timeBetween(w,v) - v.action, 0));
+		double toReturn = mu +
+				( Math.min(Math.max(w.action - v.action, 0), Math.max(v.action + timeBetween(v, w) - w.action, 0) - mu)) +
+				( Math.min(Math.max(v.action - w.action, 0), Math.max(w.action + timeBetween(w, v) - v.action, 0) - mu));
+		
+		//return Math.min(Math.max(w.action - v.action, 0), Math.max(v.action + timeBetween(v, w) - w.action, 0));
+		return toReturn;
 	}
       
 	// computes the utility of the given node (sum of the neighbours' penalties and its own's)
@@ -95,7 +102,7 @@ public class Distributed extends SolverManager {
 		}
 		for (Node w : v.forwardNeighbours) {
 			penalty += penalty(v, w);
-			if (print && penalty(w,v) > 0) System.out.println("Penalty with forward node " + w.id + ": " + penalty(v,w));
+			if (print && penalty(v,w) > 0) System.out.println("Penalty with forward node " + w.id + ": " + penalty(v,w));
 		}
 		
 		if (print) {
@@ -303,7 +310,7 @@ public class Distributed extends SolverManager {
         	// utility of action = 0
         	if (verbose3) {
         		System.out.println("\nSampled node " + sampledNode.id + " of action " + sampledNode.resource + ", " + sampledNode.action + " and window " + sampledNode.initialTime + " - " + sampledNode.finalTime);
-        		/*
+        		
         		System.out.println("Neighbours: ");
         		for (Node n : sampledNode.backwardNeighbours) {
         			System.out.println(n.id + " of action " + n.action + " and timebetween " + timeBetween(n, sampledNode) + " and window " + n.initialTime + " - " + n.finalTime);
@@ -311,7 +318,7 @@ public class Distributed extends SolverManager {
         		for (Node n : sampledNode.forwardNeighbours) {
         			System.out.println(n.id + " of action " + n.action + " and timebetween " + timeBetween(sampledNode, n) + " and window " + n.initialTime + " - " + n.finalTime);
         		}
-        		*/
+        		
         	}
         	
         	sampledNode.setAction("noresource", 0);
@@ -324,7 +331,7 @@ public class Distributed extends SolverManager {
         		f = plan.f;
         		register.put(assignment, f);
         	}
-        	u0 = utility(sampledNode, f, false);
+        	u0 = utility(sampledNode, f, verbose3);
         	p0 = Parameters.delta*Math.exp(eta*u0); // unnormalized probability mass of action 0
         	Z = p0; // total unnormalized probability mass (to be incremented with the other actions)
         	if (verbose3) System.out.println("Evaluated action 0. Utility of 0: " + u0 + ", prob: " + p0);
@@ -344,21 +351,21 @@ public class Distributed extends SolverManager {
 	        	partition.add(initialTime);
 	        	partition.add(finalTime);
 	        	
-	        	for (Node n : sampledNode.backwardNeighbours) {	        		
-	        		if (n.action == 0 || !n.resource.equals(u.getUavName())) continue; // only those that are active and under the same resource
-	        		timeBetween = timeBetween(n, sampledNode); // time needed to execute n and fly to sampledNode
+	        	for (Node w : sampledNode.backwardNeighbours) {	        		
+	        		if (w.action == 0 || !w.resource.equals(u.getUavName())) continue; // only those that are active and under the same resource
+	        		timeBetween = timeBetween(w, sampledNode); // time needed to execute n and fly to sampledNode
 	        		// those outside sampleNode's time window will be later filtered out
-	        		partition.add(n.action);
-	        		partition.add(n.action + timeBetween/2);
-	        		partition.add(n.action + timeBetween);
+	        		partition.add(w.action);
+	        		//partition.add(w.action + timeBetween/2);
+	        		partition.add(w.action + timeBetween);
 	        	}
-	        	for (Node n : sampledNode.forwardNeighbours) {
-	        		if (n.action == 0 || !n.resource.equals(u.getUavName())) continue; // only those under the same resource
-	        		timeBetween = timeBetween(sampledNode, n); // time needed to execute sampleNode and fly to n
+	        	for (Node w : sampledNode.forwardNeighbours) {
+	        		if (w.action == 0 || !w.resource.equals(u.getUavName())) continue; // only those under the same resource
+	        		timeBetween = timeBetween(sampledNode, w); // time needed to execute sampleNode and fly to n
 	        		// those outside sampleNode's time window will be later filtered out
-	        		partition.add(n.action - timeBetween);
-	        		partition.add(n.action - timeBetween/2);
-	        		partition.add(n.action);
+	        		partition.add(w.action - timeBetween);
+	        		//partition.add(w.action - timeBetween/2);
+	        		partition.add(w.action);
 	        	}
 	        	
 	        	// filtering out knots and building vector a
@@ -377,11 +384,11 @@ public class Distributed extends SolverManager {
 	        		f = plan.f;
 	        		register.put(assignment, f);
 	        	}
-	        	b[0] = utility(sampledNode, f, false);	        	
+	        	b[0] = utility(sampledNode, f, verbose3);	        	
 	        	if (verbose3) System.out.println("Evaluated action " + a[0] + ": utility " + b[0] + ", prob: " + Math.exp(Parameters.eta*b[0]));
 	        	for (int i = 1; i < a.length; i++) {
 	        		sampledNode.setAction(u.getUavName(), a[i]);
-	        		b[i] = utility(sampledNode, f, false);	        		
+	        		b[i] = utility(sampledNode, f, verbose3);	        		
 	        		if (verbose3) System.out.println("Evaluated action " + a[i] + ": utility " + b[i] + ", prob: " + Math.exp(Parameters.eta*b[i]));
 	        	}
 	        	bb.put(u, b);
