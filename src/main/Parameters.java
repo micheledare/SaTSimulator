@@ -14,7 +14,7 @@ public class Parameters {
     static public double eta = 0.5;
     static public double delta = 1;
     static public double K = 0.01;
-    static public boolean verbose = false;
+    static public boolean verbose = true;
     static public boolean verbose2 = false;
     static public int printIterations = -1;
 
@@ -57,7 +57,7 @@ public class Parameters {
 
     //static public double targetTopSpeed = 28;
     // uav velocity (m/s)
-    static public int nUAV = 1; // number of UAVs
+    static public int nUAV = 2; // number of UAVs
     static public boolean isCentralised = true; //
     static public double uavEvading = 2; // number of sampling of evasivness
     static public double uavVelocity = 65;

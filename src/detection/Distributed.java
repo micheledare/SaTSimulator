@@ -82,7 +82,6 @@ public class Distributed extends SolverManager {
 			return 0;
 		}
 		
-		
 		double mu = Math.min(Math.max(v.action + timeBetween(v,w) - w.action, 0), Math.max(w.action + timeBetween(w,v) - v.action, 0));
 		double toReturn = mu +
 				( Math.min(Math.max(w.action - v.action, 0), Math.max(v.action + timeBetween(v, w) - w.action, 0) - mu)) +
@@ -133,8 +132,7 @@ public class Distributed extends SolverManager {
 		for (UAV u : assignment.keySet()) {
 			toReturn.addAll(assignment.get(u));
 		}
-		
-		return toReturn;
+		return (ArrayList<SearchPattern>) toReturn.stream().sorted((sp1, sp2) -> sp1.toString().compareTo(sp2.toString())).collect(Collectors.toList());
 	}
     
 	// feasibility of an assignment
@@ -203,18 +201,20 @@ public class Distributed extends SolverManager {
     	
     	// greedy initialization - produce the greedy schedule
     	HashMap<UAV,ArrayList<SearchPattern>> sequence = new GreedyAlgorithm(candidates).sequence(); // result of greedy algorithm
-		HashMap<SearchPattern, Integer> greedyPlan = new HashMap<>(); // greedy schedule
-		HashMap<SearchPattern, UAV> whichUAV = new HashMap<>(); // which UAV does each search pattern
+    	HashMap<UAV, HashMap<SearchPattern, Integer>> greedyPlan = new HashMap<>();
         for (UAV u : sequence.keySet()){ 
 	        int startTime = 0;
 	        SearchPattern previous = null;
+	        HashMap<SearchPattern, Integer> uavplan = new HashMap<>();
 	        for (SearchPattern sp : sequence.get(u)){
 	            startTime =  new Double(Math.max(startTime+distanceSP(previous,sp,u),sp.getMinT())).intValue();
-	            greedyPlan.put(sp, startTime);
-	            whichUAV.put(sp, u);
+	            uavplan.put(sp, startTime);
 	            previous = sp;
 	        }
+            greedyPlan.put(u, uavplan);
         }
+        
+        System.out.println(greedyPlan.toString());
     	
     	List<Node> nodesList = new ArrayList<>();
     	int id = 1;
@@ -225,22 +225,24 @@ public class Distributed extends SolverManager {
     		double tf = ti + sizeSplits;
     		for (int k = 0; k < numSplits; k++) {
     			
-    			Node n = new Node(id, sp, ti, tf);
-    			if (Parameters.verbose) System.out.println("Node added. Id " + id + " search pattern " + sp.toString() + " (time window " + ti + "-" + tf + ")");
-    			id += 1;
-        		
-        		// greedy initialization
-        		if(greedyPlan.containsKey(sp)){
-        			if(greedyPlan.get(sp) >= ti && greedyPlan.get(sp) < tf){
-        				n.setAction(whichUAV.get(sp).getUavName(), greedyPlan.get(sp));
-        				if (Parameters.verbose) System.out.println("Node " + n.id + " initialized at " + n.resource + ", action " + n.action);
-        			}
-        		}
-        		else {
-        			if (Parameters.verbose) System.out.println("Node " + n.id + " initialized at " + n.resource + ", action " + n.action);
-        		}
-        		
-    			nodesList.add(n);
+    			for (UAV u : State.getUAVs()) {
+    				Node n = new Node(id, sp, ti, tf);
+        			if (Parameters.verbose) System.out.println("Node added. Id " + id + " search pattern " + sp.toString() + " (time window " + ti + "-" + tf + ")");
+        			id += 1;
+            		
+            		// greedy initialization
+            		if(greedyPlan.get(u).containsKey(sp)){
+            			if(greedyPlan.get(u).get(sp) >= ti && greedyPlan.get(u).get(sp) < tf){
+            				n.setAction(u.getUavName(), greedyPlan.get(u).get(sp));
+            				if (Parameters.verbose) System.out.println("Node " + n.id + " initialized at " + n.resource + ", action " + n.action);
+            			}
+            		}
+            		else {
+            			if (Parameters.verbose) System.out.println("Node " + n.id + " initialized at " + n.resource + ", action " + n.action);
+            		}
+            		
+        			nodesList.add(n);
+    			}
 				
     			ti = tf;
     			tf = ti + sizeSplits;
@@ -268,8 +270,8 @@ public class Distributed extends SolverManager {
                 
         // evaluating initial configuration
     	HashMap<UAV, ArrayList<SearchPattern>> bestAssignment = convertToAssignment(graph); // best configuration - assignment
-        ArrayList<SearchPattern> bestPlanList = convertToPlanList(bestAssignment); // best configuration - plan
-    	Plan plan = createPlan(bestPlanList, graph.size());
+        ArrayList<SearchPattern> list = convertToPlanList(bestAssignment); // best configuration - plan
+    	Plan plan = createPlan(list, graph.size());
     	double fmax = plan.f;
         System.out.println("Starting at assignment " + bestAssignment.toString() + "\nof value " + fmax);
         boolean feas = isFeasible(bestAssignment);
@@ -286,9 +288,9 @@ public class Distributed extends SolverManager {
         double f;
                 
         // register of all plans found and their value
-        HashMap<HashMap<UAV, ArrayList<SearchPattern>>, Double> register = new HashMap<>();
+        HashMap<ArrayList<SearchPattern>, Double> register = new HashMap<>();
         HashMap<UAV, ArrayList<SearchPattern>> assignment;
-        if (feas) register.put(bestAssignment, fmax);
+        if (feas) register.put(list, fmax);
         
         // Start iterations
         Random r = new Random(Parameters.seed);
@@ -325,11 +327,19 @@ public class Distributed extends SolverManager {
         	// get value of f
         	assignment = convertToAssignment(graph);
         	if (!isFeasible(assignment)) f = 0;
-        	else if (register.containsKey(assignment)) f = register.get(assignment);
         	else {
-        		plan = updatePlan(plan, convertToPlanList(assignment));
-        		f = plan.f;
-        		register.put(assignment, f);
+        		list = convertToPlanList(assignment);
+        		if (register.containsKey(list)) f = register.get(list);
+            	else {
+            		plan = updatePlan(plan, list);
+            		f = plan.f;
+            		register.put(list, f);
+    		    	if (f > fmax){
+    		    		fmax = f;
+    		    		bestAssignment = assignment;
+    		    		System.out.println("Plan updated. Iteration: " + iterationsCount + " New plan: " + bestAssignment.toString() + " value: " + fmax);
+    		    	}
+            	}
         	}
         	u0 = utility(sampledNode, f, verbose3);
         	p0 = Parameters.delta*Math.exp(eta*u0); // unnormalized probability mass of action 0
@@ -378,11 +388,19 @@ public class Distributed extends SolverManager {
 	        	sampledNode.setAction(u.getUavName(), a[0]);
 	        	assignment = convertToAssignment(graph);
 	        	if (!isFeasible(assignment)) f = 0;
-	        	else if (register.containsKey(assignment)) f = register.get(assignment);
 	        	else {
-	        		plan = updatePlan(plan, convertToPlanList(assignment));
-	        		f = plan.f;
-	        		register.put(assignment, f);
+	        		list = convertToPlanList(assignment);
+	        		if (register.containsKey(list)) f = register.get(list);
+	            	else {
+	            		plan = updatePlan(plan, list);
+	            		f = plan.f;
+	            		register.put(list, f);
+	    		    	if (f > fmax){
+	    		    		fmax = f;
+	    		    		bestAssignment = assignment;
+	    		    		System.out.println("Plan updated. Iteration: " + iterationsCount + " New plan: " + bestAssignment.toString() + " value: " + fmax);
+	    		    	}
+	            	}
 	        	}
 	        	b[0] = utility(sampledNode, f, verbose3);	        	
 	        	if (verbose3) System.out.println("Evaluated action " + a[0] + ": utility " + b[0] + ", prob: " + Math.exp(Parameters.eta*b[0]));
@@ -436,33 +454,25 @@ public class Distributed extends SolverManager {
     			feasibleIterations += 1;
 	        	assignment = convertToAssignment(graph);
 	        	if (!isFeasible(assignment)) f = 0;
-	        	else if (register.containsKey(assignment)) f = register.get(assignment);
 	        	else {
-	        		plan = updatePlan(plan, convertToPlanList(assignment));
-	        		f = plan.f;
-	        		register.put(assignment, f);
+	        		list = convertToPlanList(assignment);
+	        		if (register.containsKey(list)) f = register.get(list);
+	            	else {
+	            		plan = updatePlan(plan, list);
+	            		f = plan.f;
+	            		register.put(list, f);
+	    		    	if (f > fmax){
+	    		    		fmax = f;
+	    		    		bestAssignment = assignment;
+	    		    		System.out.println("Plan updated. Iteration: " + iterationsCount + " New plan: " + bestAssignment.toString() + " value: " + fmax);
+	    		    	}
+	            	}
 	        	}
-		    	if (f > fmax){
-		    		fmax = f;
-		    		bestAssignment = assignment;
-		    		System.out.println("Plan updated. Iteration: " + iterationsCount + " New plan: " + bestAssignment.toString() + " value: " + fmax);
-		    	}
     		}
     		elapsed = System.currentTimeMillis() - timezero;
         }
 	
-		int feasiblePlans = 0;
-		for (HashMap<UAV, ArrayList<SearchPattern>> assment : register.keySet()) {
-			if (isFeasible(assment)){
-				feasiblePlans += 1;
-				if(register.get(assment) > fmax) {
-					fmax = register.get(assment);
-					bestAssignment = assment;
-		    		System.out.println("There was a better plan in the register: " + bestAssignment.toString() + " value: " + fmax);
-				}
-			}
-		}
-		System.out.println("Iterations " + iterationsCount + ", feasible " + feasibleIterations + ", feasible plans " + feasiblePlans + ", fmax: " + fmax); 
+		System.out.println("Iterations " + iterationsCount + ", feasible " + feasibleIterations + ", feasible plans " + register.size() + ", fmax: " + fmax); 
     	return bestAssignment;
     }
 
